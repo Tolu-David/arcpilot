@@ -17,5 +17,12 @@ export default defineConfig({
     allowedHosts: true,
     host: '0.0.0.0',
     port: 5173,
+    proxy: {
+      // Forward /api/agent/* requests to the Express payment server
+      '/api/agent': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
+    },
   },
 })

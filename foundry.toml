@@ -1,11 +1,12 @@
 [profile.default]
 src = "contracts"
 out = "contracts/out"
-libs = ["node_modules"]
+libs = ["node_modules", "lib"]
 solc_version = "0.8.20"
 evm_version = "paris"
 remappings = [
   "@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/",
+  "forge-std/=lib/forge-std/src/",
 ]
 
 [profile.default.fuzz]

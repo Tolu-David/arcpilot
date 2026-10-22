@@ -6,6 +6,7 @@ export const ARCPILOT_ABI = [
   { inputs: [], name: 'spendableBalance', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'reserveBps', outputs: [{ type: 'uint16' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'obligationCount', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'activeObligationsTotal', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'paymentCount', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'payeeCount', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'owner', outputs: [{ type: 'address' }], stateMutability: 'view', type: 'function' },

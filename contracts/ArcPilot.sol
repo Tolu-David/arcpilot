@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/access/Ownable2Step.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -19,7 +19,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
  *  - Payees are explicitly allowed by the owner, each with an optional per-payee daily limit
  *  - Every payment is recorded onchain as a PaymentRecord for auditability
  */
-contract ArcPilot is Ownable, ReentrancyGuard {
+contract ArcPilot is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     // ── Token ────────────────────────────────────────────────────────────────
@@ -38,6 +38,7 @@ contract ArcPilot is Ownable, ReentrancyGuard {
     }
 
     uint256 public obligationCount;
+    uint256 public activeObligationsTotal;
     mapping(uint256 => Obligation) public obligations;
 
     // ── Payees ───────────────────────────────────────────────────────────────
@@ -84,11 +85,14 @@ contract ArcPilot is Ownable, ReentrancyGuard {
 
     // ── Constructor ───────────────────────────────────────────────────────────
     /**
+     * @param initialOwner Initial owner address
      * @param _usdc      USDC token address (0x3600...0000 on Arc)
      * @param _reserveBps Initial reserve fraction in basis points
      */
-    constructor(address _usdc, uint16 _reserveBps) Ownable(msg.sender) {
+    constructor(address initialOwner, address _usdc, uint16 _reserveBps) Ownable(initialOwner) {
+        if (initialOwner == address(0)) revert ZeroAddress();
         if (_usdc == address(0)) revert ZeroAddress();
+        if (_usdc.code.length == 0) revert ZeroAddress();
         if (_reserveBps > 10000) revert InvalidReserveBps(_reserveBps);
         usdc = IERC20(_usdc);
         reserveBps = _reserveBps;
@@ -101,12 +105,8 @@ contract ArcPilot is Ownable, ReentrancyGuard {
     }
 
     /// @notice Sum of all active obligation amounts
-    function totalObligations() public view returns (uint256 total) {
-        for (uint256 i = 0; i < obligationCount; i++) {
-            if (obligations[i].active) {
-                total += obligations[i].amount;
-            }
-        }
+    function totalObligations() public view returns (uint256) {
+        return activeObligationsTotal;
     }
 
     /// @notice USDC amount held as reserve
@@ -132,6 +132,12 @@ contract ArcPilot is Ownable, ReentrancyGuard {
 
     // ── Obligations ────────────────────────────────────────────────────────────
     function setObligation(uint256 id, string calldata label, uint256 amount) external onlyOwner {
+        Obligation storage obligation = obligations[id];
+        if (obligation.active) {
+            activeObligationsTotal -= obligation.amount;
+        }
+        activeObligationsTotal += amount;
+
         obligations[id] = Obligation(label, amount, true);
         if (id >= obligationCount) obligationCount = id + 1;
         emit ObligationSet(id, label, amount);
@@ -139,6 +145,7 @@ contract ArcPilot is Ownable, ReentrancyGuard {
 
     function removeObligation(uint256 id) external onlyOwner {
         if (id >= obligationCount || !obligations[id].active) revert ObligationNotFound(id);
+        activeObligationsTotal -= obligations[id].amount;
         obligations[id].active = false;
         emit ObligationRemoved(id);
     }
@@ -167,7 +174,8 @@ contract ArcPilot is Ownable, ReentrancyGuard {
 
     function payeeCount() external view returns (uint256) {
         uint256 count = 0;
-        for (uint256 i = 0; i < payeeList.length; i++) {
+        uint256 len = payeeList.length;
+        for (uint256 i = 0; i < len; i++) {
             if (payees[payeeList[i]].allowed) count++;
         }
         return count;
@@ -210,7 +218,7 @@ contract ArcPilot is Ownable, ReentrancyGuard {
     }
 
     // ── Deposit / Withdraw (owner) ─────────────────────────────────────────────
-    /// @notice Pull USDC into the treasury (owner must approve first)
+    /// @notice Pull USDC into the treasury. Anyone may call this; the caller must have approved this contract to spend the amount first.
     function deposit(uint256 amount) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
         usdc.safeTransferFrom(msg.sender, address(this), amount);

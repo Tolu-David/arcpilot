@@ -1,0 +1,30 @@
+# ── Secrets ────────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Contract build artifacts & deploy metadata ──────────────────────────────
+contracts/out/
+contracts/cache/
+contracts/contract-metadata/
+
+# ── Dependencies ────────────────────────────────────────────────────────────
+node_modules/
+
+# ── Vite / TypeScript build output ──────────────────────────────────────────
+dist/
+.vite/
+
+# ── Foundry local config & test cache ───────────────────────────────────────
+.foundry/
+cache/
+lib/
+contracts/test-helpers/
+
+# ── OS / editor noise ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
