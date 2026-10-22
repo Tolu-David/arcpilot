@@ -1,0 +1,12 @@
+[profile.default]
+src = "contracts"
+out = "contracts/out"
+libs = ["node_modules"]
+solc_version = "0.8.20"
+evm_version = "paris"
+remappings = [
+  "@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/",
+]
+
+[profile.default.fuzz]
+runs = 256
