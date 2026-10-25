@@ -21,6 +21,18 @@ cache/
 lib/
 contracts/test-helpers/
 
+# ── TypeScript build output ──────────────────────────────────────────────────
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# ── Private key files (never commit) ─────────────────────────────────────────
+*.pem
+*.key
+*.p12
+*.pfx
+keystore/
+wallet.json
+
 # ── OS / editor noise ───────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db

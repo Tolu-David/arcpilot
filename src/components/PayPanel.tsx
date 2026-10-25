@@ -53,11 +53,22 @@ export function PayPanel({ contractAddress }: PayPanelProps) {
     if (!to || !amount) return
     if (wrongChain) return
     const parsed = parseUSDC(amount)
+    // Derive a unique bytes32 requestId for this direct-pay attempt.
+    // Uses the current timestamp and sender address so each submission gets
+    // a distinct nonce — satisfies the contract's duplicate-prevention check.
+    // The preparation-flow (ReviewPaymentModal) derives requestId server-side;
+    // this panel is the legacy direct-pay path and generates it client-side.
+    const nonce = `${Date.now()}-${address ?? ''}-${to}`
+    const requestId = `0x${nonce
+      .split('')
+      .reduce((acc, c) => acc + c.charCodeAt(0).toString(16).padStart(2, '0'), '')
+      .slice(0, 64)
+      .padEnd(64, '0')}` as `0x${string}`
     writeContract({
       address: contractAddress!,
       abi: ARCPILOT_ABI,
       functionName: 'pay',
-      args: [to as `0x${string}`, parsed, memo],
+      args: [to as `0x${string}`, parsed, requestId, memo],
       chainId: ARC_TESTNET_CHAIN_ID,
     })
   }

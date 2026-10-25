@@ -10,6 +10,13 @@ export const ARCPILOT_ABI = [
   { inputs: [], name: 'paymentCount', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'payeeCount', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   { inputs: [], name: 'owner', outputs: [{ type: 'address' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'paused', outputs: [{ type: 'bool' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'pauser', outputs: [{ type: 'address' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'rescuer', outputs: [{ type: 'address' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'maxTxAmount', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'globalDailyLimit', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'globalSpentToday', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
+  { inputs: [], name: 'dailyRemainingGlobal', outputs: [{ type: 'uint256' }], stateMutability: 'view', type: 'function' },
   {
     inputs: [{ name: 'id', type: 'uint256' }],
     name: 'obligations',
@@ -107,7 +114,12 @@ export const ARCPILOT_ABI = [
     type: 'function',
   },
   {
-    inputs: [{ name: 'to', type: 'address' }, { name: 'amount', type: 'uint256' }, { name: 'memo', type: 'string' }],
+    inputs: [
+      { name: 'to',        type: 'address' },
+      { name: 'amount',    type: 'uint256' },
+      { name: 'requestId', type: 'bytes32' },
+      { name: 'memo',      type: 'string'  },
+    ],
     name: 'pay',
     outputs: [],
     stateMutability: 'nonpayable',
@@ -130,7 +142,13 @@ export const ARCPILOT_ABI = [
   // Events
   {
     anonymous: false,
-    inputs: [{ indexed: true, name: 'paymentId', type: 'uint256' }, { indexed: true, name: 'to', type: 'address' }, { name: 'amount', type: 'uint256' }, { name: 'memo', type: 'string' }],
+    inputs: [
+      { indexed: true,  name: 'paymentId', type: 'uint256' },
+      { indexed: true,  name: 'to',        type: 'address' },
+      { indexed: false, name: 'amount',    type: 'uint256' },
+      { indexed: true,  name: 'requestId', type: 'bytes32' },
+      { indexed: false, name: 'memo',      type: 'string'  },
+    ],
     name: 'PaymentExecuted',
     type: 'event',
   },
