@@ -176,6 +176,9 @@ export function ReviewPaymentModal({ receipt, onClose, onConfirmed }: ReviewPaym
     state.status === 'submitted'       ||
     state.status === 'pending'
   )
+  // All pre-flight errors are hard blocks — UNAUTHORIZED_WALLET included.
+  // pay() is onlyOwner; an unmatched or unloaded owner address blocks submission
+  // here rather than producing an on-chain revert that still burns gas.
   const canSubmit  = !isInFlight && !isTerminal && !currentPreFlightErr
 
   const usdcAmount = formatUsdc(receipt.amountBaseUnits)

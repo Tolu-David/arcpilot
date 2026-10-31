@@ -32,6 +32,7 @@ import type {
   SpendingPolicyRequest,
   ContractStateSnapshot,
 } from '../../shared/types.js'
+import { validateSnapshotPlausibility } from '../snapshot-validation.js'
 
 export function buildCatalogueRouter(): Router {
   const router = Router()
@@ -200,6 +201,13 @@ export function buildCatalogueRouter(): Router {
       return
     }
 
+    // [security fix M-4] Reject implausible snapshot values.
+    const plausibilityErr = validateSnapshotPlausibility(snapshot)
+    if (plausibilityErr) {
+      res.status(400).json({ error: 'IMPLAUSIBLE_SNAPSHOT', message: plausibilityErr.message })
+      return
+    }
+
     const policyRequest: SpendingPolicyRequest = { serviceId }
     const result = evaluateSpendingPolicy(policyRequest, snapshot)
 
@@ -321,6 +329,13 @@ export function buildCatalogueRouter(): Router {
         error: 'INVALID_SNAPSHOT',
         message: err instanceof Error ? err.message : 'snapshot fields are malformed.',
       })
+      return
+    }
+
+    // [security fix M-4] Reject implausible snapshot values.
+    const plausibilityErrR = validateSnapshotPlausibility(snapshot)
+    if (plausibilityErrR) {
+      res.status(400).json({ error: 'IMPLAUSIBLE_SNAPSHOT', message: plausibilityErrR.message })
       return
     }
 

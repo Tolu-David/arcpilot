@@ -49,12 +49,14 @@ export const ARCPILOT_ABI = [
     type: 'function',
   },
   {
+    // [security fix L-4] Added missing `requestId` field matching PaymentRecord struct.
     inputs: [{ name: '', type: 'uint256' }],
     name: 'payments',
     outputs: [
       { name: 'to', type: 'address' },
       { name: 'amount', type: 'uint256' },
       { name: 'timestamp', type: 'uint256' },
+      { name: 'requestId', type: 'bytes32' },
       { name: 'memo', type: 'string' },
     ],
     stateMutability: 'view',
@@ -69,6 +71,7 @@ export const ARCPILOT_ABI = [
           { name: 'to', type: 'address' },
           { name: 'amount', type: 'uint256' },
           { name: 'timestamp', type: 'uint256' },
+          { name: 'requestId', type: 'bytes32' },
           { name: 'memo', type: 'string' },
         ],
         type: 'tuple[]',

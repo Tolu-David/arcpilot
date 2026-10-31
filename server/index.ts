@@ -25,12 +25,17 @@ async function main() {
   // ── Body parsing ──────────────────────────────────────────────────────────
   app.use(express.json({ limit: '64kb' }))
 
-  // ── CORS — allows Vite dev proxy and local tooling ────────────────────────
+  // ── CORS ──────────────────────────────────────────────────────────────────
+  // [security fix H-3] Restrict to a specific origin rather than wildcard '*'.
+  // Set ALLOWED_ORIGIN in your environment for production deployments.
+  // Use ALLOWED_ORIGIN=* only when running behind a trusted API gateway that
+  // enforces its own origin policy.
+  const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN ?? 'http://localhost:5173'
   app.use((_req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Access-Control-Allow-Origin', ALLOWED_ORIGIN)
     res.setHeader(
       'Access-Control-Allow-Headers',
-      'content-type,x-payment,payment-required,x-idempotency-key',
+      'content-type,x-payment,payment-required,x-idempotency-key,x-arcpilot-token',
     )
     res.setHeader(
       'Access-Control-Expose-Headers',

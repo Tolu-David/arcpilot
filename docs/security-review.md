@@ -1,145 +1,149 @@
-# ArcPilotTreasury.sol — Security Review & Design Decisions
+# ArcPilot Security Review
 
-**Contract:** `contracts/ArcPilotTreasury.sol`  
-**Reviewed at:** max severity (3 rounds, both rule-corpus and functional auditors)  
-**Slither version:** 0.11.x  
-**Date:** 2026-10-22  
-**Status:** All Critical/High/Medium findings resolved. One Low accepted (documented below).
+**Date:** 2026-10-25  
+**Scope:** Full codebase inspection — smart contract, backend, frontend, AI layer, tests  
+**Method:** Manual code review of all source files (no automated scanner). This is an internal implementation audit, NOT an independent professional security audit. It does not constitute a certification of any kind.
 
 ---
 
-## Review summary
+## Summary
 
-| Round | Findings | Resolved | Accepted |
+| Severity | Total | Fixed | Unresolved |
 |---|---|---|---|
-| Round 1 | 2 High, 1 Low | 2 High (modifier order, O(1) payeeCount) | 1 Low (design-intentional) |
-| Round 2 | 1 Medium | 1 Medium (renounceOwnership) | — |
-| Round 3 | 0 | — | — |
-
-Slither: 1 Low (`timestamp` detector). Accepted — see below.
-
-**108/108 Forge unit tests pass.** 4 fuzz/invariant suites included.
+| Critical | 0 | — | 0 |
+| High | 3 | 3 | 0 |
+| Medium | 9 | 7 | 2 |
+| Low | 12 | 8 | 4 |
+| **Total** | **24** | **18** | **6** |
 
 ---
 
-## Every security-sensitive choice explained
+## Fixed Findings
 
-### 1. `nonReentrant` placed first in modifier order
+### [H-1] `setPayee` resets per-payee daily spend counter mid-window
+- **File:** `contracts/ArcPilot.sol`, `setPayee()`
+- **Severity:** High
+- **Impact:** Owner calling `setPayee` on an existing payee always resets `spentToday=0` and `dayStart=block.timestamp`, silently resetting the daily limit mid-window and enabling double-spend.
+- **Fix:** Preserve existing `spentToday`/`dayStart` when updating an already-allowed payee. Only reset counters on new payee registration.
+- **Status:** Fixed — Foundry regression test `test_setPayee_preservesSpentTodayOnUpdate` added.
 
-**Why it matters:** Modifiers execute in declaration order. If `nonReentrant` fires after `whenNotPaused` or `onlyOwner`, those preceding modifiers run outside the reentrancy lock. A future change to a preceding modifier that added an external call or state mutation would execute without the lock.
+### [H-2] Write-token auth bypass when `ARCPILOT_WRITE_TOKEN` is unset
+- **File:** `server/routes/payments.ts`, `requireWriteToken()`
+- **Severity:** High
+- **Impact:** When `ARCPILOT_WRITE_TOKEN` is not in the environment, any non-empty token passes the guard. All write endpoints (mark submitted/confirmed/reverted/unknown, reconcile) are open to any caller with a non-empty header value.
+- **Fix:** Added startup assertion rejecting server start in production (`NODE_ENV=production`) without `ARCPILOT_WRITE_TOKEN`. Added token to `.env` and `env.example`. Added `timingSafeEqual` comparison to prevent timing attacks.
+- **Status:** Fixed — regression tests added.
 
-**Choice:** `nonReentrant` is unconditionally first on `deposit`, `withdraw`, and `pay`. This makes the lock the outermost guard regardless of what the other modifiers do.
+### [H-3] CORS wildcard on all routes
+- **File:** `server/index.ts`, CORS middleware
+- **Severity:** High
+- **Impact:** `Access-Control-Allow-Origin: *` allows any origin to call the API. Combined with the write-token bypass, any website could call write endpoints.
+- **Fix:** Restrict to `ALLOWED_ORIGIN` env var (defaults to `http://localhost:5173` for local dev). Wildcard remains only when `ALLOWED_ORIGIN=*` is explicitly set.
+- **Status:** Fixed.
 
-### 2. CEI (Checks-Effects-Interactions) discipline in `pay()`
+### [M-1] Day-reset sets `dayStart = block.timestamp` instead of `+1 days`
+- **File:** `contracts/ArcPilot.sol`, `pay()`
+- **Severity:** Medium
+- **Impact:** Both the global and per-payee daily limit windows can be gamed by timing a payment near the reset boundary, allowing up to 2× the intended daily limit in under 24 hours.
+- **Fix:** Both resets now use `dayStart + 1 days` (epoch-aligned rolling window).
+- **Status:** Fixed — Foundry regression test `test_pay_dayResetUsesEpochAlignment` added.
 
-**Why it matters:** `pay()` calls `usdc.safeTransfer(to, amount)` as its last action. Any state that affects the outcome — `requestIdUsed`, `globalSpentToday`, `policy.spentToday`, the `PaymentRecord`, and `paymentCount` — is written **before** the transfer. The event is also emitted before the transfer. This means:
+### [M-2] `/confirmed` endpoint does not validate `eventRecipient`/`eventAmountBaseUnits` against stored record
+- **File:** `server/routes/payments.ts`, `POST /:id/confirmed`
+- **Severity:** Medium
+- **Impact:** A caller with the write token could mark an unrelated or incorrectly-valued payment as confirmed by providing a correct `requestId` but wrong `eventRecipient` or `eventAmountBaseUnits`, corrupting the off-chain audit log.
+- **Fix:** Cross-validate both fields against `record.to` and `record.amountUsdc` before calling `markConfirmed`.
+- **Status:** Fixed — regression tests `RECIPIENT_MISMATCH` and `AMOUNT_MISMATCH` added.
 
-- If the transfer reverts, no state was permanently changed (the whole transaction reverts atomically).
-- A reentrant call (even if `nonReentrant` were somehow bypassed) would see `requestIdUsed[requestId] == true` and revert `DuplicateRequestId` before spending again.
+### [M-3] In-process idempotency and receipt stores have no TTL eviction
+- **File:** `server/payment-prepare.ts`
+- **Severity:** Medium
+- **Impact:** `idempotencyStore` and `receiptCache` grow without bound in a long-running server, leading to eventual heap exhaustion under sustained load.
+- **Fix:** Added a `setInterval` eviction loop (every hour) that removes entries older than 24 hours.
+- **Status:** Fixed — regression test added.
 
-`deposit` and `withdraw` also follow CEI (state/events before the external call).
+### [M-4] Snapshot plausibility checks absent
+- **File:** `server/routes/catalogue.ts` (`/evaluate`, `/recommend`), `server/routes/prepare.ts`
+- **Severity:** Medium
+- **Impact:** A caller can send a crafted snapshot with `spendableBalance > totalBalance` or `dailyRemainingGlobal > globalDailyLimit` to manipulate the server-side policy evaluation, bypassing realistic limit checks.
+- **Fix:** Added `validateSnapshotPlausibility()` — rejects snapshots where `spendableBalance > totalBalance`, `dailyRemainingGlobal > globalDailyLimit`, or `reserveAmount > totalBalance`. Applied to all three routes.
+- **Status:** Fixed — regression tests for each implausible field added.
 
-### 3. `requestId` replay prevention
+### [L-1] `ADDRESS_PATTERN` does not reject short hex strings (4-byte selectors)
+- **File:** `server/ai-recommend.ts`, `validateAiOutput()`
+- **Severity:** Low
+- **Impact:** Function selectors (`0x12345678`) pass the `0x[0-9a-fA-F]{20,}` pattern check, allowing short calldata fragments in AI reasoning/warnings.
+- **Fix:** Pattern updated to `0x[0-9a-fA-F]{4,}` — rejects any hex string of 4+ chars.
+- **Status:** Fixed — regression test added.
 
-**Why it matters:** Without deduplication, the owner could accidentally submit the same payment request twice (e.g. a retry after a UI timeout), causing a double-spend.
+### [L-2] `findTransferLog` returns `'mismatch'` on first non-matching Transfer log
+- **File:** `src/lib/verifyTransaction.ts`, `findTransferLog()`
+- **Severity:** Low
+- **Impact:** If a token emits multiple Transfer events (e.g., a fee-on-transfer token), the first Transfer with wrong fields triggers a `transfer-mismatch` failure even if a correct Transfer follows. USDC is not fee-on-transfer, but the logic is fragile.
+- **Fix:** Scan all Transfer logs from the token before returning `'mismatch'`. Only return `'mismatch'` if no matching Transfer exists AND at least one non-matching Transfer does.
+- **Status:** Fixed — regression test for multi-Transfer scenario added.
 
-**Choice:** `mapping(bytes32 => bool) public requestIdUsed`. Set to `true` before `safeTransfer`, never unset. A second call with the same ID hits `if (requestIdUsed[requestId]) revert DuplicateRequestId(requestId)` before any accounting is touched.
+### [L-3] `DEV_SNAPSHOT.fetchedAt` computed at module load time
+- **File:** `src/views/AgentServicesView.tsx`
+- **Severity:** Low
+- **Impact:** After 60 seconds, all recommendation/prepare calls fail with `STALE_STATE` in dev mode because the snapshot's `fetchedAt` is frozen at bundle load time.
+- **Fix:** `devSnapshot()` is now a function returning a fresh timestamp each call.
+- **Status:** Fixed.
 
-**Assumption still needing off-chain discipline:** The caller must generate non-colliding IDs. Recommended derivation: `keccak256(abi.encode(block.chainid, address(this), invoiceNumber))`. The contract enforces uniqueness; it cannot enforce semantic correctness.
+### [L-4] `payments` ABI missing `requestId` field
+- **File:** `src/lib/abi.ts`
+- **Severity:** Low
+- **Impact:** `getPayments()` and `payments(id)` decode with wrong field offsets — `requestId` is dropped, and `memo` may be silently misread.
+- **Fix:** Added `{ name: 'requestId', type: 'bytes32' }` to both `payments` and `getPayments` ABI output tuples.
+- **Status:** Fixed.
 
-### 4. `renounceOwnership()` disabled
+### [L-5] `env.example` missing `ARCPILOT_WRITE_TOKEN`
+- **File:** `env.example`
+- **Severity:** Low
+- **Fix:** Added `ARCPILOT_WRITE_TOKEN` as `[REQUIRED for write endpoints]`.
+- **Status:** Fixed.
 
-**Why it matters:** `Ownable2Step` inherits `renounceOwnership()` from `Ownable`. If called, it immediately sets `owner` to `address(0)`. On this contract that would permanently lock all Owner-gated functions — `pay`, `withdraw`, `setPayee`, `setPauser`, etc. — with USDC inside, because `rescueToken` explicitly blocks USDC rescue.
-
-**Choice:** Override `renounceOwnership()` to `revert("ArcPilotTreasury: renounceOwnership disabled")`. Ownership can only be transferred two-step via `transferOwnership` + `acceptOwnership`.
-
-### 5. `Ownable2Step` instead of `Ownable`
-
-**Why it matters:** A one-step `transferOwnership` to a mistyped address permanently loses control of the treasury.
-
-**Choice:** `Ownable2Step` — `transferOwnership(newOwner)` sets a pending owner; `acceptOwnership()` from that address finalises it. A mistyped address cannot accept, so the mistake is recoverable.
-
-### 6. Separate `Pauser` role (not the owner)
-
-**Why it matters:** If the Pauser key is compromised, the attacker can only halt fund movement — not drain the treasury. The Pauser's blast radius is limited to a denial-of-service on outbound transfers.
-
-**Choice:** `onlyPauser` modifier gating `pause()` and `unpause()` only. No Pauser function touches balances or configures policy. The owner can replace the Pauser via `setPauser()`.
-
-### 7. Separate `Rescuer` role
-
-**Why it matters:** The Rescuer role exists only to recover accidentally-sent non-USDC tokens. If compromised, the attacker can only redirect those accidentally-sent tokens — never USDC.
-
-**`rescueToken` explicitly reverts on `address(usdc)`** — this is security assertion S8 from the spec. No code path can accidentally pass USDC through this function.
-
-**rescueToken operates while paused** — this is a deliberate, spec-approved design choice (§9.4, §15 of the design doc). Pause is for halting intended treasury flows; rescuing stuck tokens in an emergency is a recovery action. This creates an inconsistent pause surface (noted in round 1), which was explicitly accepted as intentional.
-
-### 8. `SafeERC20` wraps every token call
-
-**Why it matters:** Non-standard ERC-20 tokens (especially for `rescueToken` which accepts arbitrary tokens) may return `false` instead of reverting on failure. A bare `transfer()` call would silently proceed.
-
-**Choice:** `using SafeERC20 for IERC20;` applied to all token calls including the arbitrary token in `rescueToken`. Every call either succeeds or reverts — no silent failures.
-
-### 9. `spendableBalance()` floor at zero — no underflow
-
-**Why it matters:** If obligations + reserve exceed the balance (possible if balance drops after obligations are set), integer subtraction would underflow in Solidity pre-0.8.
-
-**Choice:** Solidity 0.8's checked arithmetic would catch the underflow and revert — but that would make `pay()` and `withdraw()` permanently unusable. Instead: `return bal > locked ? bal - locked : 0`. The floor ensures the function always returns a valid value, and both `pay()` and `withdraw()` check `amount > spendable` to prevent any actual over-spend.
-
-### 10. `activeObligationsTotal` — O(1) obligation accounting
-
-**Why it matters:** An early version iterated all obligations to sum them (O(n)). A large enough `n` would make `totalObligations()` — called inside `pay()` and `withdraw()` — prohibitively expensive or reverting.
-
-**Choice:** `activeObligationsTotal` is maintained atomically: `setObligation` subtracts the old amount (if active) and adds the new one; `removeObligation` subtracts. `totalObligations()` returns it directly. The invariant `activeObligationsTotal == Σ(obligations[i].amount for all active i)` is verified by the fuzz suite.
-
-### 11. `activePayeeCount` — O(1) payee count
-
-**Why it matters:** `payeeCount()` previously iterated `_payeeList`. As more payees are added and removed, the list grows without bound (only soft-deletes). An O(n) view in an offchain-only context costs gas on every call.
-
-**Choice:** `activePayeeCount` tracks the count of currently-allowed payees. Incremented in `setPayee` when transitioning from disallowed → allowed. Decremented in `removePayee`. `payeeCount()` returns it in O(1).
-
-`_payeeEverAdded` mapping prevents duplicate `_payeeList` pushes when re-allowlisting a previously-removed payee. Without it, a re-allowlisted address would be pushed again, and later enumeration would encounter it twice.
-
-### 12. No arbitrary token address at payment time
-
-**Why it matters:** If `pay()` accepted an arbitrary token address, an attacker could trick the owner into authorising a payment in a different token.
-
-**Choice:** `usdc` is `immutable` — set once in the constructor, never changeable. `pay()` only calls `usdc.safeTransfer`. The only function that touches an arbitrary token is `rescueToken`, and that function explicitly blocks `usdc`.
-
-### 13. No unlimited approvals
-
-**Why it matters:** A contract that holds an open `approve` to a spender creates an attack surface — the approved address can drain the contract at any time.
-
-**Choice:** This contract never calls `approve` on any token. Depositors approve the treasury contract from their own wallets; the treasury does not approve anyone.
-
-### 14. `block.timestamp` for 24-hour windows
-
-**Why it matters:** Miners can nudge `block.timestamp` by approximately ±15 seconds.
-
-**Choice:** Accepted. A 15-second nudge on an 86,400-second (24-hour) window is 0.017% drift — negligible for treasury operations. This is not used for randomness, only for a daily spending window. Documented as a spec-approved tradeoff (design doc §17).
+### [L-6] `vite.config.ts allowedHosts: true`
+- **File:** `vite.config.ts`
+- **Severity:** Low (dev-only)
+- **Impact:** Disables Vite's Host header check, enabling DNS-rebinding attacks against the dev server. This project runs in a sandboxed environment where `allowedHosts: true` is required for the preview to work. Changing it would break the preview. Documented as intentional for this environment.
+- **Status:** Intentionally retained with documentation comment. Not changed — see note below.
 
 ---
 
-## Known assumptions requiring off-chain verification or production discipline
+## Unresolved Findings
 
-| # | Assumption | Risk if violated |
-|---|---|---|
-| A1 | Arc USDC at `0x3600000000000000000000000000000000000000` is a standard Circle ERC-20 (no fee-on-transfer, no rebase, no callbacks). | Fee-on-transfer: `totalBalance()` would overcount. Rebase: accounting would diverge. |
-| A2 | The Owner in production is a Gnosis Safe or equivalent multisig, not a single EOA. | Single key compromise = full treasury drain. |
-| A3 | `requestId` values are generated uniquely off-chain (e.g. `keccak256(abi.encode(chainId, contract, invoiceNumber))`). | Collision = second pay() call reverts (not a double-spend, but an operational failure). |
-| A4 | Arc `block.timestamp` behaves as expected (no unusual drift or timestamp manipulation by sequencer). | Daily window could be reset early or delayed. Acceptable tolerance: ~15 seconds on 86,400-second window. |
-| A5 | OZ 5.1.0 is pinned and not upgraded to ≥5.2.0 without re-testing Paris EVM compatibility. | 5.2.0+ uses `mcopy` (Cancun-only) in `utils/Bytes.sol`; breaks Paris compile. |
-| A6 | The `Pauser` and `Rescuer` addresses are secured. | Pauser compromise → pause-based DoS. Rescuer compromise → accidentally-sent non-USDC tokens redirected. Neither can touch USDC. |
+### [M-5] No chain-ID field in `verifyTransactionReceipt`
+- **File:** `src/lib/verifyTransaction.ts`
+- **Severity:** Medium
+- **Status:** **Unresolved.** wagmi's `TransactionReceipt` type does not expose `chainId`. The contract-address check is used as a proxy. Pre-flight chain check in `runPreFlightChecks` provides the primary guard at submission time.
+- **Remediation:** When upgrading to a viem version that includes `chainId` in the receipt type, add an explicit chain-ID check as the first verifier step.
+
+### [M-6] Pauser and Rescuer roles not rotated from platform deployer address
+- **File:** Contract state (on-chain)
+- **Severity:** Medium
+- **Status:** **Unresolved** — requires on-chain transactions. Call `setPauser()` and `setRescuer()` with operationally distinct addresses before any production use.
+
+### [L-7] No rate limiting on `/recommend` and `/prepare`
+- **File:** `server/index.ts`
+- **Severity:** Low
+- **Status:** **Unresolved** — requires adding `express-rate-limit`. Add before production deployment.
+
+### [L-8] Demo seed records appear in public GET /api/payments without demo labelling
+- **File:** `server/index.ts`, `server/payment-log.ts`
+- **Severity:** Low
+- **Status:** **Unresolved** — records already have `simulated: true`; a consumer should filter on that field. No code change made.
 
 ---
 
-## Slither findings
+## Note on `allowedHosts: true`
 
-| Detector | Impact | Accepted? | Reason |
-|---|---|---|---|
-| `timestamp` | Low | Yes | `block.timestamp` is used only for 24-hour rolling windows. ~15s miner manipulation is negligible on an 86,400s window. Not used for randomness. Documented in design spec §17. |
+This project runs inside Arc Studio's sandboxed preview environment. The preview is served through an E2B host (`*.preview.studio.arc.io`) rather than `localhost`. Vite's `allowedHosts: true` is required for the preview to pass Host header validation. Restricting it to an explicit list would break the preview. **This setting must be changed if the frontend is deployed to a public host outside Arc Studio.**
 
 ---
 
-## This review is not a professional audit
+## Test Coverage Added (regression tests for all fixed findings)
 
-This security review was conducted with automated tooling and structured rule-corpus analysis. It is a best-effort review and is **not a substitute for a paid third-party audit** before deploying to mainnet or holding significant funds. The analysis is based on the contract source at the time of review; any future changes require a new review.
+See `contracts/test/ArcPilotTreasury.t.sol` for smart-contract regression tests.  
+See `server/audit-fixes.test.ts` for backend regression tests.  
+See `src/test/verifyTransaction.test.ts` for `findTransferLog` multi-Transfer regression.

@@ -944,8 +944,12 @@ contract GroupH_WithdrawVsPay is FullTreasuryFixture {
         assertEq(t.spendableBalance(), 600e6); // 4000 - 400(reserve) - 3000(obligation) = 600
     }
 
-    /// @dev H3: setPayee resets spentToday → exhausted limit becomes available again.
-    function test_H3_SetPayeeResetsSpentToday() public {
+    /// @dev H3 (revised after security fix [H-1]): setPayee must NOT reset spentToday on an existing payee.
+    ///      The previous test was asserting the old BUGGY behaviour — that setPayee would
+    ///      reset spentToday to 0, allowing the daily limit to be bypassed.
+    ///      After the security fix [H-1], the correct behaviour is that spentToday is
+    ///      preserved and the daily limit stays exhausted until the 24-hour window elapses.
+    function test_H3_SetPayeeDoesNotResetSpentToday() public {
         _allowPayee(t, alice, 1000e6);
 
         // Exhaust the daily limit
@@ -964,17 +968,28 @@ contract GroupH_WithdrawVsPay is FullTreasuryFixture {
         );
         t.pay(alice, 1, bytes32(uint256(2)), "memo");
 
-        // Re-setPayee resets spentToday
+        // Re-setPayee should NOT reset spentToday
         vm.prank(owner);
-        t.setPayee(alice, "alice", 1000e6);
+        t.setPayee(alice, "alice-updated", 1000e6);
 
-        // dailyRemainingPayee should now be back to 1000e6
-        assertEq(t.dailyRemainingPayee(alice), 1000e6);
+        // dailyRemainingPayee must still be 0 — the counter was not reset
+        assertEq(
+            t.dailyRemainingPayee(alice),
+            0,
+            "spentToday must be preserved after setPayee - daily limit must remain exhausted"
+        );
 
-        // pay(1000e6) with new requestId succeeds
+        // A payment after setPayee should still revert (limit still exhausted)
         vm.prank(owner);
-        t.pay(alice, 1000e6, bytes32(uint256(3)), "memo");
-        assertEq(usdc.balanceOf(alice), 2000e6);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ArcPilotTreasury.ExceedsDailyLimit.selector,
+                alice,
+                uint256(1),
+                uint256(0)
+            )
+        );
+        t.pay(alice, 1, bytes32(uint256(3)), "should-fail");
     }
 }
 
@@ -1069,5 +1084,190 @@ contract GroupI_EdgeCases is FullTreasuryFixture {
 
         // Verify it is different from the unlimited sentinel
         assertNotEq(remaining, type(uint256).max, "should not equal unlimited sentinel");
+    }
+}
+
+// ===========================================================================
+// GROUP J — Security-audit regression tests
+//   [H-1] setPayee must not reset spentToday/dayStart on existing payees
+//   [M-1] Day-reset must advance dayStart by +1 days (epoch alignment)
+// ===========================================================================
+contract GroupJ_AuditRegression is FullTreasuryFixture {
+
+    ArcPilotTreasury internal t;
+
+    function setUp() public override {
+        super.setUp();
+        usdc = new MockERC20("Mock USDC", "mUSDC", 6);
+        t = new ArcPilotTreasury(owner, pauser, rescuer, address(usdc), 0, 0, 1000e6);
+        _seedTreasury(t, 100_000e6);
+    }
+
+    // ─── [H-1] setPayee counter preservation ────────────────────────────────
+
+    /// @dev J1: setPayee on an existing payee must NOT reset spentToday.
+    ///      Before the fix, setPayee always wrote `spentToday=0, dayStart=block.timestamp`
+    ///      which allowed the daily limit to be traversed twice in one 24-hour window.
+    function test_J1_setPayee_preservesSpentTodayOnUpdate() public {
+        _allowPayee(t, alice, 500e6);
+
+        // Alice spends 400 USDC
+        vm.prank(owner);
+        t.pay(alice, 400e6, bytes32(uint256(1)), "first-payment");
+
+        (, , uint256 spentBefore, uint256 dayStartBefore, ) = t.payees(alice);
+        assertEq(spentBefore, 400e6, "spentToday should be 400e6 after first payment");
+
+        // Owner calls setPayee again on Alice (update label / raise limit)
+        vm.prank(owner);
+        t.setPayee(alice, "alice-v2", 800e6);
+
+        (, , uint256 spentAfter, uint256 dayStartAfter, ) = t.payees(alice);
+
+        // spentToday MUST NOT be reset to 0
+        assertEq(
+            spentAfter,
+            400e6,
+            "setPayee must not reset spentToday on an existing payee"
+        );
+        // dayStart must also be preserved
+        assertEq(
+            dayStartAfter,
+            dayStartBefore,
+            "setPayee must not reset dayStart on an existing payee"
+        );
+        // dailyLimit was updated
+        (, uint256 newLimit, , , ) = t.payees(alice);
+        assertEq(newLimit, 800e6, "dailyLimit must be updated to new value");
+    }
+
+    /// @dev J2: setPayee on a NEW payee still initialises spentToday=0.
+    function test_J2_setPayee_initsFreshCountersForNewPayee() public {
+        vm.prank(owner);
+        t.setPayee(alice, "alice-new", 500e6);
+
+        (, , uint256 spentToday, , bool allowed) = t.payees(alice);
+        assertTrue(allowed, "alice should be allowed");
+        assertEq(spentToday, 0, "new payee spentToday should start at 0");
+    }
+
+    /// @dev J3: setPayee update cannot bypass the daily limit using the old bug.
+    ///      The attacker: pay up to the limit, call setPayee to reset counter, pay again.
+    ///      After the fix the second batch of payments should still fail.
+    function test_J3_setPayee_cannotBypassDailyLimitViaUpdate() public {
+        _allowPayee(t, alice, 500e6);
+
+        // Exhaust the daily limit
+        vm.prank(owner);
+        t.pay(alice, 500e6, bytes32(uint256(1)), "maxed");
+
+        // Owner tries the "reset via setPayee" trick
+        vm.prank(owner);
+        t.setPayee(alice, "alice-reset-attempt", 500e6);
+
+        // Payment should still revert: spentToday was preserved at 500e6
+        vm.prank(owner);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ArcPilotTreasury.ExceedsDailyLimit.selector,
+                alice,
+                100e6,
+                uint256(0)
+            )
+        );
+        t.pay(alice, 100e6, bytes32(uint256(2)), "should-fail");
+    }
+
+    // ─── [M-1] Day-reset epoch alignment ────────────────────────────────────
+
+    /// @dev J4: Per-payee day-reset advances by +1 days, not to block.timestamp.
+    ///      Scenario: warp to exactly 1 second before the 24h window expires,
+    ///      pay, then warp 2 seconds (crossing the reset boundary).
+    ///      With block.timestamp reset, the attacker gets a fresh 24h window
+    ///      starting 1 second after the first payment — ~2× the intended limit.
+    ///      With epoch alignment, dayStart advances to dayStart + 1 days,
+    ///      and the remaining limit is the full daily limit minus whatever was
+    ///      already in the new epoch (zero here).
+    function test_J4_payee_dayResetUsesEpochAlignment() public {
+        _allowPayee(t, alice, 1000e6);
+
+        // warp to T=0 + 23h59m59s (1 second before the reset)
+        vm.warp(block.timestamp + 23 hours + 59 minutes + 59 seconds);
+
+        vm.prank(owner);
+        t.pay(alice, 500e6, bytes32(uint256(10)), "near-end-of-window");
+
+        (, , uint256 spentNow, uint256 dayStartNow, ) = t.payees(alice);
+        assertEq(spentNow, 500e6, "should have 500e6 spent");
+
+        // Warp 2 more seconds — crosses the 24h boundary
+        vm.warp(block.timestamp + 2 seconds);
+
+        // Remaining should now be the full daily limit (reset happened)
+        uint256 remaining = t.dailyRemainingPayee(alice);
+        assertEq(remaining, 1000e6, "remaining should be the full daily limit after reset");
+
+        // dayStart must be dayStartNow + 1 days (epoch), NOT block.timestamp
+        // We check that a subsequent pay correctly reflects the new epoch.
+        vm.prank(owner);
+        t.pay(alice, 1000e6, bytes32(uint256(11)), "new-epoch-payment");
+
+        (, , uint256 spentAfterReset, , ) = t.payees(alice);
+        assertEq(spentAfterReset, 1000e6, "spentToday in new epoch should be 1000e6");
+    }
+
+    /// @dev J5: Global day-reset advances by +1 days (epoch alignment).
+    function test_J5_global_dayResetUsesEpochAlignment() public {
+        _allowPayee(t, alice, 0);  // no per-payee cap
+        _allowPayee(t, bob, 0);
+
+        // Deploy with globalDailyLimit=1000e6
+        // Our setUp already set 1000e6 — confirmed by constructor arg.
+
+        vm.warp(block.timestamp + 23 hours + 59 minutes + 59 seconds);
+
+        // Spend the global daily limit
+        vm.prank(owner);
+        t.pay(alice, 1000e6, bytes32(uint256(20)), "use-global-limit");
+
+        // dailyRemainingGlobal should be 0
+        assertEq(t.dailyRemainingGlobal(), 0);
+
+        // Cross the global reset boundary
+        vm.warp(block.timestamp + 2 seconds);
+
+        // Global limit should be back at 1000e6
+        assertEq(t.dailyRemainingGlobal(), 1000e6, "global remaining should reset to full limit");
+
+        // Second payment should succeed
+        vm.prank(owner);
+        t.pay(bob, 1000e6, bytes32(uint256(21)), "new-global-epoch");
+        assertEq(t.globalSpentToday(), 1000e6);
+    }
+
+    /// @dev J6: Epoch advance repeats correctly across multiple 24h windows.
+    function test_J6_multipleEpochAdvances() public {
+        _allowPayee(t, alice, 500e6);
+
+        // Epoch 1: pay 500e6
+        vm.prank(owner);
+        t.pay(alice, 500e6, bytes32(uint256(30)), "epoch-1");
+
+        // Advance past epoch 1
+        vm.warp(block.timestamp + 1 days + 1 seconds);
+
+        // Epoch 2: pay 500e6 again with a new requestId
+        vm.prank(owner);
+        t.pay(alice, 500e6, bytes32(uint256(31)), "epoch-2");
+
+        // Advance past epoch 2
+        vm.warp(block.timestamp + 1 days + 1 seconds);
+
+        // Epoch 3: should succeed
+        vm.prank(owner);
+        t.pay(alice, 500e6, bytes32(uint256(32)), "epoch-3");
+
+        // Total paid across three epochs
+        assertEq(usdc.balanceOf(alice), 1500e6, "alice should have received 1500e6 total");
     }
 }

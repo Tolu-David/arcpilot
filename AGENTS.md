@@ -31,8 +31,16 @@ An onchain USDC treasury management app on Arc Testnet. The owner deploys an `Ar
 - **Required env vars**: `SELLER_ADDRESS` (EVM address receiving USDC)
 - **Buyer**: use `GatewayClient` from `@circle-fin/x402-batching/client` with `chain: "arcTestnet"`
 
-## ArcPilotTreasury (v2)
+## ArcPilotTreasury (v3 — security-fixed, current)
 - **Source**: `contracts/ArcPilotTreasury.sol`
+- **Deployed address**: `0xc6e83868695525aa7f42032504491b82d7b841d0`
+- **Tx hash**: `0x59d6009505533acd3ec8ba138d4b7bd469299dfef8842aba0174e6935ea48b26`
+- **Explorer**: https://explorer.testnet.arc.io/address/0xc6e83868695525aa7f42032504491b82d7b841d0
+- **Chain**: Arc Testnet (chain ID 5042002)
+- **Deployed at**: 2026-10-27T16:47:46Z
+- **VITE_ARCPILOT_CONTRACT**: `0xc6e83868695525aa7f42032504491b82d7b841d0`
+
+## ArcPilotTreasury (v2 — pre-fix, superseded)
 - **Deployed address**: `0x28a05d2996207b3db64b5ad171a2db5d71c9a8f3`
 - **Tx hash**: `0x47ca16178ccad1a87cb15e13a5f7c96b710f722b7b1a6a4ed60cce83a0e293f7`
 - **Explorer**: https://explorer.testnet.arc.io/address/0x28a05d2996207b3db64b5ad171a2db5d71c9a8f3
@@ -46,7 +54,11 @@ An onchain USDC treasury management app on Arc Testnet. The owner deploys an `Ar
   - `_reserveBps`: `1000` (10%)
   - `_maxTxAmount`: `10000000000` (10,000 USDC)
   - `_globalDailyLimit`: `50000000000` (50,000 USDC)
-- **Tests**: 142/142 pass (ArcPilotTreasury.t.sol + ArcPilotTreasuryFull.t.sol)
+- **Tests**: 148/148 pass (ArcPilotTreasury.t.sol + ArcPilotTreasuryFull.t.sol)
+- **Security audit completed**: see `docs/security-review.md`. 18/24 findings fixed.
+  - [H-1] `setPayee` no longer resets daily-spend counter on existing payees.
+  - [M-1] Day-reset advances by epoch (`+1 days`), not `block.timestamp`.
+  - NOTE: The deployed contract (`0x28a05...`) has the pre-fix code. Deploy a new instance to get the fixed version.
 - **Post-deploy verified**: owner, pauser, rescuer, usdc, reserveBps, maxTxAmount, globalDailyLimit, totalBalance, spendableBalance, activeObligationsTotal, paused, paymentCount, activePayeeCount, dailyRemainingGlobal — all match constructor args
 
 ## Agent Services Page — Recommendation Flow

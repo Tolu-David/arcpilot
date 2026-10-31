@@ -18,6 +18,7 @@
 
 import { Router } from 'express'
 import { preparePayment } from '../payment-prepare.js'
+import { validateSnapshotPlausibility } from '../snapshot-validation.js'
 import type { ContractStateSnapshot } from '../../shared/types.js'
 
 // ── Snapshot validation ───────────────────────────────────────────────────────
@@ -163,6 +164,13 @@ export function buildPrepareRouter(): Router {
         error: 'INVALID_REQUEST',
         message: snapshotResult.error,
       })
+      return
+    }
+
+    // [security fix M-4] Reject implausible snapshot values.
+    const plausibilityErr = validateSnapshotPlausibility(snapshotResult.snapshot)
+    if (plausibilityErr) {
+      res.status(400).json({ error: 'IMPLAUSIBLE_SNAPSHOT', message: plausibilityErr.message })
       return
     }
 

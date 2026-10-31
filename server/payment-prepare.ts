@@ -77,6 +77,28 @@ export function _clearPrepareStore(): void {
   receiptCache.clear()
 }
 
+// [security fix M-3] Evict idempotency records older than TTL_MS to prevent
+// unbounded heap growth in long-running server processes.
+const TTL_MS = 24 * 60 * 60 * 1000  // 24 hours
+
+function evictStaleEntries(): void {
+  const cutoff = Date.now() - TTL_MS
+  for (const [key, record] of idempotencyStore) {
+    if (new Date(record.createdAt).getTime() < cutoff) {
+      idempotencyStore.delete(key)
+      receiptCache.delete(key)
+    }
+  }
+}
+
+// Run eviction every hour.  .unref() prevents the timer from keeping the
+// process alive when all other work is done (e.g. during test teardown).
+const _evictionInterval = setInterval(evictStaleEntries, 60 * 60 * 1000)
+if (typeof _evictionInterval.unref === 'function') _evictionInterval.unref()
+
+/** Exported for testing only — do not call in production code. */
+export { evictStaleEntries as _evictStaleEntriesForTest }
+
 // ── Payload hash ──────────────────────────────────────────────────────────────
 
 /**

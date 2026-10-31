@@ -126,18 +126,20 @@ export function runPreFlightChecks(
     }
   }
 
-  // 3. Connected wallet must be the authorised contract owner (pay() is onlyOwner)
-  //    Block if ownerAddress is undefined — wait for the contract read to resolve
-  if (!ownerAddress) {
+  // 3. Connected wallet must be the authorised contract owner (pay() is onlyOwner).
+  //    Fail-safe: if ownerAddress has not loaded yet we block submission — we cannot
+  //    authorise a wallet whose ownership status is unknown.  The user can retry once
+  //    the owner read resolves.  If ownerAddress is known and differs, block and
+  //    explain — the transaction would revert on-chain regardless.
+  if (!ownerAddress || connectedAddr.toLowerCase() !== ownerAddress.toLowerCase()) {
+    const ownerHint = ownerAddress
+      ? `${ownerAddress.slice(0, 8)}…${ownerAddress.slice(-6)}`
+      : 'loading…'
     return {
       code: 'UNAUTHORIZED_WALLET',
-      message: 'Contract owner address could not be determined. Please wait and try again.',
-    }
-  }
-  if (connectedAddr.toLowerCase() !== ownerAddress.toLowerCase()) {
-    return {
-      code: 'UNAUTHORIZED_WALLET',
-      message: `Only the contract owner (${ownerAddress.slice(0, 8)}…${ownerAddress.slice(-6)}) may submit payments. Your connected wallet is not authorised.`,
+      message: ownerAddress
+        ? `Only the contract owner (${ownerHint}) may submit payments. Your connected wallet is not authorised.`
+        : `Contract owner address has not loaded yet. Please wait and try again.`,
     }
   }
 

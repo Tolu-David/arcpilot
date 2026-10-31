@@ -26,6 +26,7 @@
 
 import { Router } from 'express'
 import type { Request, Response, NextFunction } from 'express'
+import { timingSafeEqual, randomBytes } from 'crypto'
 import {
   listPayments,
   getPayment,
@@ -53,7 +54,41 @@ function str(v: unknown): string | null {
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
-const WRITE_TOKEN = process.env.ARCPILOT_WRITE_TOKEN ?? ''
+// [security fix H-2] ARCPILOT_WRITE_TOKEN is required in production.
+// In development (NODE_ENV !== 'production'), a random ephemeral token is
+// generated so write endpoints are still guarded but don't need manual setup.
+const IS_PRODUCTION = process.env.NODE_ENV === 'production'
+const WRITE_TOKEN: string = (() => {
+  const t = process.env.ARCPILOT_WRITE_TOKEN
+  if (IS_PRODUCTION && (!t || t.trim() === '')) {
+    throw new Error(
+      '[ArcPilot] ARCPILOT_WRITE_TOKEN must be set in production. ' +
+      'Add it to your environment variables before starting the server.',
+    )
+  }
+  // In dev: use the env var if set, otherwise generate an ephemeral token
+  // (logged once at startup so developers can use it).
+  if (t && t.trim() !== '') return t.trim()
+  const ephemeral = randomBytes(16).toString('hex')
+  console.warn(
+    `[ArcPilot] ARCPILOT_WRITE_TOKEN not set. ` +
+    `Using ephemeral dev token: ${ephemeral} (not suitable for production)`,
+  )
+  return ephemeral
+})()
+
+// Export for testing
+export const _writeTokenForTest = (): string => WRITE_TOKEN
+
+/** Compare tokens in constant time to prevent timing-based token discovery. */
+function tokensEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  try {
+    return timingSafeEqual(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'))
+  } catch {
+    return false
+  }
+}
 
 function requireWriteToken(req: Request, res: Response, next: NextFunction): void {
   const provided = str(req.headers['x-arcpilot-token'])
@@ -64,7 +99,7 @@ function requireWriteToken(req: Request, res: Response, next: NextFunction): voi
     })
     return
   }
-  if (WRITE_TOKEN !== '' && provided !== WRITE_TOKEN) {
+  if (!tokensEqual(provided, WRITE_TOKEN)) {
     res.status(403).json({
       error: 'FORBIDDEN',
       message: 'Invalid X-ArcPilot-Token.',
@@ -241,6 +276,28 @@ export function buildPaymentsRouter(): Router {
       res.status(422).json({
         error: 'REQUEST_ID_MISMATCH',
         message: `Event requestId ${eventRequestId} does not match record requestId ${record.requestId}.`,
+      })
+      return
+    }
+
+    // [security fix M-2] Cross-validate event fields against the stored record.
+    // A caller with the write token must not be able to corrupt the audit log
+    // by supplying a correct requestId but wrong recipient or amount.
+    if (eventRecipient.toLowerCase() !== record.to.toLowerCase()) {
+      res.status(422).json({
+        error: 'RECIPIENT_MISMATCH',
+        message:
+          `Event recipient ${eventRecipient} does not match the stored recipient ${record.to}. ` +
+          'The event belongs to a different payment.',
+      })
+      return
+    }
+    if (eventAmountBaseUnits !== record.amountUsdc) {
+      res.status(422).json({
+        error: 'AMOUNT_MISMATCH',
+        message:
+          `Event amount ${eventAmountBaseUnits} does not match the stored amount ${record.amountUsdc}. ` +
+          'The event belongs to a different payment.',
       })
       return
     }

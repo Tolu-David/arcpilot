@@ -48,12 +48,12 @@ import { findExtendedService, AUTO_APPROVE_THRESHOLD_BASE_UNITS } from './catalo
 // depend on the actual @google/genai types (which we do not import in tests).
 
 type GenAiClient = {
-  interactions: {
-    create(params: {
+  models: {
+    generateContent(params: {
       model: string
-      input: string
+      contents: Array<{ role: string; parts: Array<{ text: string }> }>
       config?: object
-    }): Promise<{ outputText?: string | null }>
+    }): Promise<{ text?: string | null }>
   }
 }
 
@@ -95,8 +95,8 @@ function goodOutput(overrides: Record<string, unknown> = {}): unknown {
 /** Build a minimal mock Google AI Studio client that returns a given output. */
 function mockClient(outputOrBehaviour: string | Error | 'timeout' | 'no-output'): GenAiClient {
   return {
-    interactions: {
-      create: () => {
+    models: {
+      generateContent: () => {
         if (outputOrBehaviour === 'timeout') {
           return new Promise(() => {}) // never resolves
         }
@@ -105,9 +105,9 @@ function mockClient(outputOrBehaviour: string | Error | 'timeout' | 'no-output')
         }
         if (outputOrBehaviour === 'no-output') {
           // Simulates a safety-filtered / refused response
-          return Promise.resolve({ outputText: null })
+          return Promise.resolve({ text: null })
         }
-        return Promise.resolve({ outputText: outputOrBehaviour })
+        return Promise.resolve({ text: outputOrBehaviour })
       },
     },
   }
@@ -425,13 +425,13 @@ describe('getAiRecommendation — successful responses', () => {
   })
 
   it('truncates an oversized intent before sending to the model', async () => {
-    type CreateParams = { model: string; input: string; config?: object }
+    type GenerateContentParams = { model: string; contents: Array<{ role: string; parts: Array<{ text: string }> }>; config?: object }
     let capturedInput: string | null = null
     const capturingClient: GenAiClient = {
-      interactions: {
-        create: (params: CreateParams) => {
-          capturedInput = params.input
-          return Promise.resolve({ outputText: JSON.stringify(goodOutput()) })
+      models: {
+        generateContent: (params: GenerateContentParams) => {
+          capturedInput = params.contents[0]?.parts[0]?.text ?? ""
+          return Promise.resolve({ text: JSON.stringify(goodOutput()) })
         },
       },
     }
@@ -610,15 +610,15 @@ describe('prompt injection defence', () => {
   afterEach(() => { _resetClientForTest() })
 
   it('sanitises embedded newlines in user intent (raw \\n cannot break message boundary)', async () => {
-    type CreateParams = { model: string; input: string; config?: { systemInstruction?: string } }
+    type GenerateContentParams = { model: string; contents: Array<{ role: string; parts: Array<{ text: string }> }>; config?: { systemInstruction?: string } }
     let capturedSystemInstruction = ''
     let capturedInput = ''
     const capturingClient: GenAiClient = {
-      interactions: {
-        create: (params: CreateParams) => {
+      models: {
+        generateContent: (params: GenerateContentParams) => {
           capturedSystemInstruction = params.config?.systemInstruction ?? ''
-          capturedInput = params.input
-          return Promise.resolve({ outputText: JSON.stringify(goodOutput()) })
+          capturedInput = params.contents[0]?.parts[0]?.text ?? ""
+          return Promise.resolve({ text: JSON.stringify(goodOutput()) })
         },
       },
     }
@@ -641,13 +641,13 @@ describe('prompt injection defence', () => {
   })
 
   it('truncates intent that exceeds MAX_INTENT_CHARS to prevent token flooding', async () => {
-    type CreateParams = { model: string; input: string; config?: object }
+    type GenerateContentParams = { model: string; contents: Array<{ role: string; parts: Array<{ text: string }> }>; config?: object }
     let capturedInput = ''
     const capturingClient: GenAiClient = {
-      interactions: {
-        create: (params: CreateParams) => {
-          capturedInput = params.input
-          return Promise.resolve({ outputText: JSON.stringify(goodOutput()) })
+      models: {
+        generateContent: (params: GenerateContentParams) => {
+          capturedInput = params.contents[0]?.parts[0]?.text ?? ""
+          return Promise.resolve({ text: JSON.stringify(goodOutput()) })
         },
       },
     }

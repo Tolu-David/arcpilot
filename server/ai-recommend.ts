@@ -33,10 +33,10 @@ import { formatUsdc } from './spending-policy.js'
 
 // ── Configuration ──────────────────────────────────────────────────────────────
 
-/** Hard timeout for the entire Gemini call (ms). Default: 15 s. */
+/** Hard timeout for the entire Gemini call (ms). Default: 30 s. */
 export const AI_TIMEOUT_MS: number = (() => {
   const n = Number(process.env.AI_TIMEOUT_MS)
-  return Number.isFinite(n) && n > 0 ? n : 15_000
+  return Number.isFinite(n) && n > 0 ? n : 30_000
 })()
 
 /** Maximum output tokens the model may generate. */
@@ -60,7 +60,7 @@ const VALID_VERDICTS = new Set<AiVerdict>([
 ])
 
 /** Default Gemini model. Override with AI_STUDIO_MODEL env var. */
-const DEFAULT_MODEL = 'gemini-2.0-flash'
+const DEFAULT_MODEL = 'gemini-flash-lite-latest'
 
 // ── JSON Schema for structured output ─────────────────────────────────────────
 // Shape: { recommendation, serviceId, reasoning, warnings, alternatives }
@@ -114,10 +114,10 @@ const RECOMMENDATION_SCHEMA = {
 // without a real key and inject their own mock via _setClientForTest().
 
 type GenAiClient = {
-  interactions: {
-    create(params: {
+  models: {
+    generateContent(params: {
       model: string
-      input: string
+      contents: Array<{ role: string; parts: Array<{ text: string }> }>
       config?: {
         systemInstruction?: string
         maxOutputTokens?: number
@@ -125,7 +125,7 @@ type GenAiClient = {
         responseMimeType?: string
         responseSchema?: object
       }
-    }): Promise<{ outputText?: string | null }>
+    }): Promise<{ text?: string | null }>
   }
 }
 
@@ -257,8 +257,10 @@ export function buildMessages(
 
 // ── Output validation ──────────────────────────────────────────────────────────
 
-/** Address-like pattern — rejects model output that leaked addresses. */
-const ADDRESS_PATTERN = /0x[0-9a-fA-F]{20,}/
+// [security fix L-1] Reject any hex string of 4+ chars (includes 4-byte selectors
+// and short calldata fragments, not only 20-byte addresses).
+// Using {4,} instead of {20,} catches '0x12345678'-style function selectors.
+const ADDRESS_PATTERN = /0x[0-9a-fA-F]{4,}/
 
 /**
  * Validate that parsed JSON conforms to AiRecommendationOutput.
@@ -419,9 +421,9 @@ export async function getAiRecommendation(
   const client = getClient()
   const { systemInstruction, userMessage } = buildMessages(serviceId, sanitisedIntent, policyResult)
 
-  const callPromise = client.interactions.create({
+  const callPromise = client.models.generateContent({
     model: process.env.AI_STUDIO_MODEL ?? DEFAULT_MODEL,
-    input: userMessage,
+    contents: [{ role: 'user', parts: [{ text: userMessage }] }],
     config: {
       systemInstruction,
       maxOutputTokens: MAX_TOKENS,
@@ -449,7 +451,7 @@ export async function getAiRecommendation(
     )
   }
 
-  const rawText = response.outputText
+  const rawText = response.text
   if (!rawText) {
     throw new AiUnavailableError(
       'AI_REFUSAL',

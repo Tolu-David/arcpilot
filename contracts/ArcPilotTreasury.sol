@@ -206,7 +206,11 @@ contract ArcPilotTreasury is Ownable2Step, Pausable, ReentrancyGuard {
 
         if (block.timestamp >= globalDayStart + 1 days) {
             globalSpentToday = 0;
-            globalDayStart = block.timestamp;
+            // [security fix H-1/M-1] Advance by whole-day epochs to preserve the
+            // rolling 24-hour window.  Using block.timestamp here would restart
+            // the window from "now", allowing up to 2× the daily limit if timed
+            // near the reset boundary.
+            globalDayStart = globalDayStart + 1 days;
         }
 
         if (globalDailyLimit != 0 && globalSpentToday + amount > globalDailyLimit) {
@@ -216,7 +220,8 @@ contract ArcPilotTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         PayeePolicy storage policy = payees[to];
         if (block.timestamp >= policy.dayStart + 1 days) {
             policy.spentToday = 0;
-            policy.dayStart = block.timestamp;
+            // [security fix H-1/M-1] Advance by one epoch (same reason as global reset).
+            policy.dayStart = policy.dayStart + 1 days;
         }
 
         if (policy.dailyLimit != 0 && policy.spentToday + amount > policy.dailyLimit) {
@@ -271,10 +276,17 @@ contract ArcPilotTreasury is Ownable2Step, Pausable, ReentrancyGuard {
         }
 
         if (!payees[payee].allowed) {
+            // New payee: initialise counters fresh.
             activePayeeCount++;
+            payees[payee] = PayeePolicy(label, dailyLimit, 0, block.timestamp, true);
+        } else {
+            // [security fix H-1] Existing payee: preserve spentToday and dayStart.
+            // Resetting them would silently erase how much has been spent this window,
+            // allowing the daily limit to be traversed twice in one 24-hour period.
+            payees[payee].label      = label;
+            payees[payee].dailyLimit = dailyLimit;
+            // allowed remains true — no change needed
         }
-
-        payees[payee] = PayeePolicy(label, dailyLimit, 0, block.timestamp, true);
         emit PayeeSet(payee, label, dailyLimit);
     }
 

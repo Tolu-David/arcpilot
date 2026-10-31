@@ -69,17 +69,23 @@ import type {
 // When the treasury adapter is in dev/fixture mode the browser cannot fetch live
 // contract state.  This fixture represents a mid-range treasury for UI demo
 // purposes only.  It is clearly labelled and never used as authoritative data.
-const DEV_SNAPSHOT: SnapshotPayload = {
-  totalBalance:           '5000000000',  // 5 000 USDC
-  activeObligationsTotal: '0',
-  reserveAmount:          '500000000',   // 10 % reserve
-  spendableBalance:       '4500000000',  // 4 500 USDC spendable
-  reserveBps:             1000,
-  maxTxAmount:            '10000000000',
-  globalDailyLimit:       '50000000000',
-  dailyRemainingGlobal:   '50000000000',
-  paused:                 false,
-  fetchedAt:              Date.now(),
+//
+// [security fix L-3] This is a FUNCTION so that fetchedAt is computed at call
+// time, not at module load time.  A module-level constant would become stale
+// after 60 seconds, causing all policy/prepare calls to fail with STALE_STATE.
+function devSnapshot(): SnapshotPayload {
+  return {
+    totalBalance:           '5000000000',  // 5 000 USDC
+    activeObligationsTotal: '0',
+    reserveAmount:          '500000000',   // 10 % reserve
+    spendableBalance:       '4500000000',  // 4 500 USDC spendable
+    reserveBps:             1000,
+    maxTxAmount:            '10000000000',
+    globalDailyLimit:       '50000000000',
+    dailyRemainingGlobal:   '50000000000',
+    paused:                 false,
+    fetchedAt:              Date.now(),
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -844,7 +850,7 @@ export function AgentServicesView() {
 
   const handleGetRecommendation = useCallback(async (serviceId: string) => {
     // Re-stamp the snapshot timestamp to prevent immediate STALE_STATE rejection.
-    const snapshot: SnapshotPayload = { ...DEV_SNAPSHOT, fetchedAt: Date.now() }
+    const snapshot: SnapshotPayload = devSnapshot()
     await fetchRecommendation(serviceId, userIntent, snapshot)
   }, [fetchRecommendation, userIntent])
 
@@ -854,7 +860,7 @@ export function AgentServicesView() {
     clearRecommendation()
     setReviewServiceId(null)
     try {
-      const snapshot: SnapshotPayload = { ...DEV_SNAPSHOT, fetchedAt: Date.now() }
+      const snapshot: SnapshotPayload = devSnapshot()
       await fetchRecommendation(serviceId, userIntent, snapshot)
     } finally {
       setRequestingId(null)
@@ -868,7 +874,7 @@ export function AgentServicesView() {
     setReviewServiceId(serviceId)
     resetPrepare()
     const idempotencyKey = `${baseIdempotencyKey}-${serviceId}-${Date.now()}`
-    const snapshot: SnapshotPayload = { ...DEV_SNAPSHOT, fetchedAt: Date.now() }
+    const snapshot: SnapshotPayload = devSnapshot()
     await prepare(serviceId, idempotencyKey, snapshot)
   }, [prepare, resetPrepare, baseIdempotencyKey])
 

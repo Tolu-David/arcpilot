@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
-    "server": "tsx watch server/index.ts",
+    "server": "bun --watch server/start.ts",
     "build": "tsc --project tsconfig.json && vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit && tsc --noEmit --project tsconfig.server.json",
@@ -18,7 +18,9 @@
     "test:payment-prepare": "tsx --test server/payment-prepare.test.ts",
     "test:reconciler": "tsx --test server/reconciler.test.ts",
     "test:ui": "vitest run",
-    "test:ui:watch": "vitest"
+    "test:audit-fixes": "tsx --test server/audit-fixes.test.ts",
+    "test:ui:watch": "vitest",
+    "test:e2e": "bun run contracts/test-integration/e2e-scenarios.ts"
   },
   "dependencies": {
     "@circle-fin/x402-batching": "^3.5.0",
